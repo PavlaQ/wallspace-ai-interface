@@ -27,7 +27,8 @@ from PIL import Image
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "model.onnx")
 API_SECRET = os.environ.get("API_SECRET")  # if set, every request must send it
-INPUT_SIZE = 512                            # segformer-*-finetuned-ade-512-512
+# Match the model's training resolution: 512 for b0–b4, 640 for b5.
+INPUT_SIZE = int(os.environ.get("INPUT_SIZE", "512"))
 WALL_CLASS = 0                              # ADE20K: class index 0 == "wall"
 
 # ImageNet normalization (SegFormer preprocessing).
@@ -53,14 +54,28 @@ def _preprocess(img: Image.Image) -> np.ndarray:
     return np.ascontiguousarray(arr, dtype=np.float32)
 
 
+def _upsample(score: np.ndarray, w: int, h: int) -> np.ndarray:
+    """Bilinearly resize a low-res score map to the full photo size."""
+    return np.asarray(
+        Image.fromarray(score.astype(np.float32), mode="F").resize((w, h), Image.BILINEAR),
+        dtype=np.float32,
+    )
+
+
 def _wall_mask(img: Image.Image) -> bytes:
-    """Run the model and return a PNG (white = wall) at the original size."""
+    """Run the model and return a PNG (white = wall) at the original size.
+
+    Quality matters more than the binary argmax: we take the wall score and the
+    best competing-class score, upsample BOTH to the photo size, and decide per
+    full-res pixel. The wall boundary (incl. sloped ceilings / skosy) follows the
+    real edge instead of a blocky 128px grid scaled up after the fact.
+    """
     w, h = img.size
-    logits = session.run(None, {_input_name: _preprocess(img)})[0]  # [1,150,H/4,W/4]
-    labels = logits[0].argmax(axis=0).astype(np.uint8)              # [H/4, W/4]
-    small = Image.fromarray(np.where(labels == WALL_CLASS, 255, 0).astype(np.uint8))
-    # Upscale the binary mask to the original photo size; the browser smooths it.
-    mask = small.resize((w, h), Image.BILINEAR).point(lambda v: 255 if v >= 128 else 0)
+    logits = session.run(None, {_input_name: _preprocess(img)})[0][0]  # [150, H/4, W/4]
+    wall = logits[WALL_CLASS]                                          # [H/4, W/4]
+    others = np.delete(logits, WALL_CLASS, axis=0).max(axis=0)         # best non-wall class
+    is_wall = _upsample(wall, w, h) > _upsample(others, w, h)          # smooth full-res decision
+    mask = Image.fromarray(np.where(is_wall, 255, 0).astype(np.uint8))
     buf = io.BytesIO()
     mask.save(buf, format="PNG", optimize=True)
     return buf.getvalue()

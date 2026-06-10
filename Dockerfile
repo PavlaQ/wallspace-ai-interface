@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # override with --build-arg MODEL_FILE=model_quantized.onnx for a smaller/faster
 # image at a small quality cost.
 ARG MODEL_FILE=model.onnx
-ARG MODEL_REPO=Xenova/segformer-b2-finetuned-ade-512-512
+ARG MODEL_REPO=Xenova/segformer-b4-finetuned-ade-512-512
 RUN python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/${MODEL_REPO}/resolve/main/onnx/${MODEL_FILE}', 'model.onnx')"
 
 COPY main.py .
